@@ -33,6 +33,10 @@ jobs:
                 proxy_set_header X-Real-IP $remote_addr;
                 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                 proxy_set_header X-Forwarded-Proto $scheme;
+                proxy_connect_timeout 300;
+                proxy_send_timeout 300;
+                proxy_read_timeout 300;
+                send_timeout 300;
             }
         }
         EOF
@@ -88,9 +92,17 @@ jobs:
         sudo docker-compose build --no-cache
         sudo docker-compose up -d
         
+        # Wait for the container to start
+        echo "Waiting for the container to start..."
+        sleep 10
+        
         # Check if containers are running
         echo "Checking container status..."
         sudo docker-compose ps
+        
+        # Check container logs
+        echo "Checking container logs..."
+        sudo docker-compose logs
         
         # Configure Nginx if not already configured
         if [ ! -f "/etc/nginx/sites-available/afcon-chatbot" ]; then
@@ -113,7 +125,17 @@ jobs:
                 sudo ufw allow 5000/tcp
                 echo "Firewall configured to allow HTTP traffic"
             fi
+        else
+            # Update Nginx configuration
+            echo "Updating Nginx configuration..."
+            sudo cp ~/nginx.conf /etc/nginx/sites-available/afcon-chatbot
+            sudo nginx -t
+            sudo systemctl restart nginx
         fi
+        
+        # Test the application
+        echo "Testing the application..."
+        curl -v http://localhost:5000/health || echo "Application health check failed"
         
         echo "Deployment completed successfully!"
         EOF

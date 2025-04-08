@@ -636,4 +636,6 @@ if __name__ == '__main__':
     if not os.path.exists(session_dir):
         os.makedirs(session_dir)
     
+    # Ensure we're listening on all interfaces
+    print(f"Starting server on {host}:{port}")
     app.run(host=host, port=port, debug=debug)
