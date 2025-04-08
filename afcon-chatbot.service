@@ -1,0 +1,16 @@
+[Unit]
+Description=AFCON Chatbot Service
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/app
+ExecStart=/home/ubuntu/app/venv/bin/gunicorn --workers 3 --bind 0.0.0.0:5000 app:app
+Restart=always
+RestartSec=5
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=afcon-chatbot
+
+[Install]
+WantedBy=multi-user.target 
