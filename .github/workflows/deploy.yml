@@ -1,118 +1,117 @@
-name: Deploy to EC2
-
-on:
-  push:
-    branches: [ main ]
-  workflow_dispatch:
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
+name: Deploy to EC2  
+on:   
+  push:     
+    branches: [ main ]   
+  workflow_dispatch:  
+jobs:   
+  deploy:     
+    runs-on: ubuntu-latest          
+    steps:     
+    - name: Checkout code       
+      uses: actions/checkout@v3            
     
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-      
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9'
-        
-    - name: Install dependencies
+    - name: Set up Python       
+      uses: actions/setup-python@v4       
+      with:         
+        python-version: '3.9'              
+    
+    - name: Install dependencies       
+      run: |         
+        python -m pip install --upgrade pip         
+        pip install -r requirements.txt              
+    
+    - name: Configure SSH       
+      run: |         
+        mkdir -p ~/.ssh/         
+        echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/private.key         
+        chmod 600 ~/.ssh/private.key         
+        echo -e "Host ec2\n\tHostName ${{ secrets.EC2_HOST }}\n\tUser ${{ secrets.EC2_USER }}\n\tIdentityFile ~/.ssh/private.key\n\tStrictHostKeyChecking no" > ~/.ssh/config              
+    
+    - name: Create Nginx config file
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        
-    - name: Configure SSH
+        cat > nginx.conf << 'EOF'
+        server {
+            listen 80;
+            server_name _;
+            
+            location / {
+                proxy_pass http://127.0.0.1:5000;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+        }
+        EOF
+    
+    - name: Create deployment script
       run: |
-        mkdir -p ~/.ssh/
-        echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/private.key
-        chmod 600 ~/.ssh/private.key
-        echo -e "Host ec2\n\tHostName ${{ secrets.EC2_HOST }}\n\tUser ${{ secrets.EC2_USER }}\n\tIdentityFile ~/.ssh/private.key\n\tStrictHostKeyChecking no" > ~/.ssh/config
+        cat > deploy.sh << 'EOF'
+        #!/bin/bash
         
+        # Check if app directory exists, if not create it and set up the environment
+        if [ ! -d "/home/${{ secrets.EC2_USER }}/app" ]; then
+            echo "App directory does not exist. Setting up initial environment..."
+            
+            # Create app directory
+            mkdir -p /home/${{ secrets.EC2_USER }}/app
+            
+            # Install required packages if not already installed
+            if ! command -v python3 &> /dev/null; then
+                sudo apt-get update
+                sudo apt-get install -y python3-pip python3-venv git nginx
+            fi
+            
+            # Set up Python virtual environment
+            cd /home/${{ secrets.EC2_USER }}/app
+            python3 -m venv venv
+            source venv/bin/activate
+            
+            # Clone the repository
+            git clone https://github.com/${{ github.repository }}.git .
+            
+            # Install dependencies
+            pip install -r requirements.txt
+            
+            # Set up systemd service
+            sudo cp afcon-chatbot.service /etc/systemd/system/
+            sudo systemctl daemon-reload
+            sudo systemctl enable afcon-chatbot
+            sudo systemctl start afcon-chatbot
+            
+            # Set up Nginx as reverse proxy
+            sudo cp ~/nginx.conf /etc/nginx/sites-available/afcon-chatbot
+            
+            # Enable the Nginx site
+            sudo ln -sf /etc/nginx/sites-available/afcon-chatbot /etc/nginx/sites-enabled/
+            sudo rm -f /etc/nginx/sites-enabled/default
+            sudo nginx -t
+            sudo systemctl restart nginx
+            
+            # Set proper permissions
+            sudo chown -R ${{ secrets.EC2_USER }}:${{ secrets.EC2_USER }} /home/${{ secrets.EC2_USER }}/app
+            
+            echo "Initial setup completed successfully!"
+        else
+            # Normal deployment process
+            cd /home/${{ secrets.EC2_USER }}/app
+            git pull origin main
+            
+            # Activate virtual environment
+            source venv/bin/activate
+            
+            # Install dependencies
+            pip install -r requirements.txt
+            
+            # Restart the application
+            sudo systemctl restart afcon-chatbot
+        fi
+        EOF
+    
     - name: Deploy to EC2
       run: |
-        # Create Nginx configuration file
-        cat > nginx.conf << 'EOF'
-server {
-    listen 80;
-    server_name _;
-
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-EOF
-
-        # Create deployment script
-        cat > deploy.sh << 'EOF'
-#!/bin/bash
-
-# Check if app directory exists, if not create it and set up the environment
-if [ ! -d "/home/${{ secrets.EC2_USER }}/app" ]; then
-    echo "App directory does not exist. Setting up initial environment..."
-    
-    # Create app directory
-    mkdir -p /home/${{ secrets.EC2_USER }}/app
-    
-    # Install required packages if not already installed
-    if ! command -v python3 &> /dev/null; then
-        sudo apt-get update
-        sudo apt-get install -y python3-pip python3-venv git nginx
-    fi
-    
-    # Set up Python virtual environment
-    cd /home/${{ secrets.EC2_USER }}/app
-    python3 -m venv venv
-    source venv/bin/activate
-    
-    # Clone the repository
-    git clone https://github.com/${{ github.repository }}.git .
-    
-    # Install dependencies
-    pip install -r requirements.txt
-    
-    # Set up systemd service
-    sudo cp afcon-chatbot.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable afcon-chatbot
-    sudo systemctl start afcon-chatbot
-    
-    # Set up Nginx as reverse proxy
-    sudo cp nginx.conf /etc/nginx/sites-available/afcon-chatbot
-    
-    # Enable the Nginx site
-    sudo ln -sf /etc/nginx/sites-available/afcon-chatbot /etc/nginx/sites-enabled/
-    sudo rm -f /etc/nginx/sites-enabled/default
-    sudo nginx -t
-    sudo systemctl restart nginx
-    
-    # Set proper permissions
-    sudo chown -R ${{ secrets.EC2_USER }}:${{ secrets.EC2_USER }} /home/${{ secrets.EC2_USER }}/app
-    
-    echo "Initial setup completed successfully!"
-else
-    # Normal deployment process
-    cd /home/${{ secrets.EC2_USER }}/app
-    git pull origin main
-    
-    # Activate virtual environment
-    source venv/bin/activate
-    
-    # Install dependencies
-    pip install -r requirements.txt
-    
-    # Restart the application
-    sudo systemctl restart afcon-chatbot
-fi
-EOF
-
         # Copy files to EC2
         scp deploy.sh nginx.conf ec2:~/
         
         # Execute deployment script on EC2
-        ssh ec2 "chmod +x ~/deploy.sh && ~/deploy.sh" 
+        ssh ec2 "chmod +x ~/deploy.sh && ~/deploy.sh"
