@@ -20,6 +20,23 @@ jobs:
         chmod 600 ~/.ssh/private.key
         echo -e "Host ec2\n\tHostName ${{ secrets.EC2_HOST }}\n\tUser ${{ secrets.EC2_USER }}\n\tIdentityFile ~/.ssh/private.key\n\tStrictHostKeyChecking no" > ~/.ssh/config
     
+    - name: Create Nginx config file
+      run: |
+        cat > nginx.conf << 'EOF'
+        server {
+            listen 80;
+            server_name _;
+            
+            location / {
+                proxy_pass http://127.0.0.1:5000;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+            }
+        }
+        EOF
+    
     - name: Create deployment script
       run: |
         cat > deploy.sh << 'EOF'
@@ -81,21 +98,8 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y nginx
             
-            # Create Nginx configuration
-            sudo bash -c 'cat > /etc/nginx/sites-available/afcon-chatbot << EOL
-server {
-    listen 80;
-    server_name _;
-    
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOL'
+            # Copy Nginx configuration
+            sudo cp ~/nginx.conf /etc/nginx/sites-available/afcon-chatbot
             
             # Enable the Nginx site
             sudo ln -sf /etc/nginx/sites-available/afcon-chatbot /etc/nginx/sites-enabled/
@@ -116,8 +120,8 @@ EOL'
     
     - name: Deploy to EC2
       run: |
-        # Copy deployment script to EC2
-        scp deploy.sh ec2:~/
+        # Copy files to EC2
+        scp deploy.sh nginx.conf ec2:~/
         
         # Execute deployment script on EC2
         ssh ec2 "chmod +x ~/deploy.sh && ~/deploy.sh"
