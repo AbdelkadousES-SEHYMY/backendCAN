@@ -32,6 +32,23 @@ jobs:
         
     - name: Deploy to EC2
       run: |
+        # Create Nginx configuration file
+        cat > nginx.conf << 'EOF'
+server {
+    listen 80;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+EOF
+
+        # Create deployment script
         cat > deploy.sh << 'EOF'
 #!/bin/bash
 
@@ -66,20 +83,7 @@ if [ ! -d "/home/${{ secrets.EC2_USER }}/app" ]; then
     sudo systemctl start afcon-chatbot
     
     # Set up Nginx as reverse proxy
-    sudo bash -c 'cat > /etc/nginx/sites-available/afcon-chatbot << NGINXEOF
-server {
-    listen 80;
-    server_name _;
-
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-NGINXEOF'
+    sudo cp nginx.conf /etc/nginx/sites-available/afcon-chatbot
     
     # Enable the Nginx site
     sudo ln -sf /etc/nginx/sites-available/afcon-chatbot /etc/nginx/sites-enabled/
@@ -107,8 +111,8 @@ else
 fi
 EOF
 
-        # Copy deployment script to EC2
-        scp deploy.sh ec2:~/deploy.sh
+        # Copy files to EC2
+        scp deploy.sh nginx.conf ec2:~/
         
         # Execute deployment script on EC2
         ssh ec2 "chmod +x ~/deploy.sh && ~/deploy.sh" 
