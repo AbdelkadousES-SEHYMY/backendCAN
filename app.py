@@ -113,7 +113,7 @@ en_to_fr_responses = {
     'Sorry, there was an error processing your request. Please try again.': 'Désolé, une erreur s\'est produite lors du traitement de votre demande. Veuillez réessayer.'
 }
 
-app = Flask(_name_)
+app = Flask(__name__)
 # Use environment variables for configuration
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key')
 app.config['SESSION_TYPE'] = 'filesystem'
@@ -625,10 +625,15 @@ def health_check():
     # Add a health check endpoint for Docker
     return jsonify({'status': 'healthy'})
 
-if _name_ == '_main_':
+if __name__ == '__main__':
     # Use environment variables for host and port if available
     host = os.environ.get('HOST', '0.0.0.0')
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('DEBUG', 'False').lower() == 'true'
+    
+    # Create session directory if it doesn't exist
+    session_dir = os.path.join(os.getcwd(), 'flask_session')
+    if not os.path.exists(session_dir):
+        os.makedirs(session_dir)
     
     app.run(host=host, port=port, debug=debug)
