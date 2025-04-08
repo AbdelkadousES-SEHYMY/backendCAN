@@ -1,149 +1,77 @@
-name: Deploy to EC2 with Docker
+name: Deploy to EC2
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-      
-    - name: Configure SSH
-      run: |
-        mkdir -p ~/.ssh/
-        echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/private.key
-        chmod 600 ~/.ssh/private.key
-        echo -e "Host ec2\n\tHostName ${{ secrets.EC2_HOST }}\n\tUser ${{ secrets.EC2_USER }}\n\tIdentityFile ~/.ssh/private.key\n\tStrictHostKeyChecking no" > ~/.ssh/config
+    - uses: actions/checkout@v2
     
-    - name: Create Nginx config file
-      run: |
-        cat > nginx.conf << 'EOF'
-        server {
-            listen 80;
-            server_name _;
-            
-            location / {
-                proxy_pass http://127.0.0.1:5000;
-                proxy_set_header Host $host;
-                proxy_set_header X-Real-IP $remote_addr;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                proxy_set_header X-Forwarded-Proto $scheme;
-                proxy_connect_timeout 300;
-                proxy_send_timeout 300;
-                proxy_read_timeout 300;
-                send_timeout 300;
-            }
-        }
-        EOF
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v1
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
     
-    - name: Create deployment script
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+    
+    - name: Build, tag, and push image to Amazon ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: backend-can
+        IMAGE_TAG: ${{ github.sha }}
       run: |
-        cat > deploy.sh << 'EOF'
-        #!/bin/bash
-        
-        # Check if Docker is installed, if not install it
-        if ! command -v docker &> /dev/null; then
-            echo "Docker is not installed. Installing Docker..."
-            sudo apt-get update
-            sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
-            sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-            sudo apt-get update
-            sudo apt-get install -y docker-ce docker-ce-cli containerd.io
-            sudo usermod -aG docker $USER
-            echo "Docker installed successfully"
-        fi
-        
-        # Check if Docker Compose is installed, if not install it
-        if ! command -v docker-compose &> /dev/null; then
-            echo "Docker Compose is not installed. Installing Docker Compose..."
-            sudo curl -L "https://github.com/docker/compose/releases/download/v2.20.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-            sudo chmod +x /usr/local/bin/docker-compose
-            echo "Docker Compose installed successfully"
-        fi
-        
-        # Create app directory if it doesn't exist
-        if [ ! -d "/home/${{ secrets.EC2_USER }}/app" ]; then
-            echo "App directory does not exist. Creating it..."
-            mkdir -p /home/${{ secrets.EC2_USER }}/app
-            mkdir -p /home/${{ secrets.EC2_USER }}/app/flask_session
-        fi
-        
-        # Navigate to app directory
-        cd /home/${{ secrets.EC2_USER }}/app
-        
-        # Clone or pull the repository
-        if [ ! -d ".git" ]; then
-            echo "Repository not found. Cloning..."
-            git clone https://github.com/${{ github.repository }}.git .
-        else
-            echo "Repository found. Pulling latest changes..."
-            git pull origin main
-        fi
-        
-        # Build and start Docker containers
-        echo "Building and starting Docker containers..."
-        sudo docker-compose down || true
-        sudo docker-compose build --no-cache
-        sudo docker-compose up -d
-        
-        # Wait for the container to start
-        echo "Waiting for the container to start..."
-        sleep 10
-        
-        # Check if containers are running
-        echo "Checking container status..."
-        sudo docker-compose ps
-        
-        # Check container logs
-        echo "Checking container logs..."
-        sudo docker-compose logs
-        
-        # Configure Nginx if not already configured
-        if [ ! -f "/etc/nginx/sites-available/afcon-chatbot" ]; then
-            echo "Configuring Nginx..."
-            sudo apt-get update
-            sudo apt-get install -y nginx
-            
-            # Copy Nginx configuration
-            sudo cp ~/nginx.conf /etc/nginx/sites-available/afcon-chatbot
-            
-            # Enable the Nginx site
-            sudo ln -sf /etc/nginx/sites-available/afcon-chatbot /etc/nginx/sites-enabled/
-            sudo rm -f /etc/nginx/sites-enabled/default
-            sudo nginx -t
-            sudo systemctl restart nginx
-            
-            # Configure firewall to allow HTTP traffic
-            if command -v ufw &> /dev/null; then
-                sudo ufw allow 80/tcp
-                sudo ufw allow 5000/tcp
-                echo "Firewall configured to allow HTTP traffic"
-            fi
-        else
-            # Update Nginx configuration
-            echo "Updating Nginx configuration..."
-            sudo cp ~/nginx.conf /etc/nginx/sites-available/afcon-chatbot
-            sudo nginx -t
-            sudo systemctl restart nginx
-        fi
-        
-        # Test the application
-        echo "Testing the application..."
-        curl -v http://localhost:5000/health || echo "Application health check failed"
-        
-        echo "Deployment completed successfully!"
-        EOF
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
     
     - name: Deploy to EC2
-      run: |
-        # Copy files to EC2
-        scp deploy.sh nginx.conf ec2:~/
-        
-        # Execute deployment script on EC2
-        ssh ec2 "chmod +x ~/deploy.sh && ~/deploy.sh"
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          # Login to ECR
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+          
+          # Pull the latest image
+          docker pull ${{ steps.login-ecr.outputs.registry }}/backend-can:${{ github.sha }}
+          
+          # Stop and remove existing container
+          docker stop backend-can || true
+          docker rm backend-can || true
+          
+          # Run new container
+          docker run -d \
+            --name backend-can \
+            -p 5000:5000 \
+            -e FLASK_ENV=production \
+            -e FLASK_APP=app.py \
+            ${{ steps.login-ecr.outputs.registry }}/backend-can:${{ github.sha }}
+          
+          # Create Nginx configuration
+          sudo tee /etc/nginx/sites-available/backend-can << 'EOF'
+          server {
+              listen 80;
+              server_name api.canadaimmigration.ai;
+              
+              location / {
+                  proxy_pass http://localhost:5000;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+          }
+          EOF
+          
+          # Enable the site and restart Nginx
+          sudo ln -sf /etc/nginx/sites-available/backend-can /etc/nginx/sites-enabled/
+          sudo nginx -t && sudo systemctl restart nginx
