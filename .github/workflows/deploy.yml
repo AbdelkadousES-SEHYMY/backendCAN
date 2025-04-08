@@ -68,10 +68,20 @@ jobs:
             source venv/bin/activate
             
             # Clone the repository
-            git clone https://github.com/${{ github.repository }}.git .
+            git clone https://github.com/AbdelkadousES-SEHYMY/backendCAN.git .
             
             # Install dependencies
             pip install -r requirements.txt
+            
+            # Configure the application to listen on all interfaces
+            if [ -f "app.py" ]; then
+                # Check if the app is configured to listen on all interfaces
+                if ! grep -q "host='0.0.0.0'" app.py; then
+                    # Add host parameter to app.run() if it doesn't exist
+                    sed -i "s/app.run(/app.run(host='0.0.0.0', /g" app.py
+                    echo "Updated app.py to listen on all interfaces"
+                fi
+            fi
             
             # Set up systemd service
             sudo cp afcon-chatbot.service /etc/systemd/system/
@@ -88,6 +98,13 @@ jobs:
             sudo nginx -t
             sudo systemctl restart nginx
             
+            # Configure firewall to allow HTTP traffic
+            if command -v ufw &> /dev/null; then
+                sudo ufw allow 80/tcp
+                sudo ufw allow 5000/tcp
+                echo "Firewall configured to allow HTTP traffic"
+            fi
+            
             # Set proper permissions
             sudo chown -R ${{ secrets.EC2_USER }}:${{ secrets.EC2_USER }} /home/${{ secrets.EC2_USER }}/app
             
@@ -103,8 +120,34 @@ jobs:
             # Install dependencies
             pip install -r requirements.txt
             
+            # Configure the application to listen on all interfaces
+            if [ -f "app.py" ]; then
+                # Check if the app is configured to listen on all interfaces
+                if ! grep -q "host='0.0.0.0'" app.py; then
+                    # Add host parameter to app.run() if it doesn't exist
+                    sed -i "s/app.run(/app.run(host='0.0.0.0', /g" app.py
+                    echo "Updated app.py to listen on all interfaces"
+                fi
+            fi
+            
             # Restart the application
             sudo systemctl restart afcon-chatbot
+        fi
+        
+        # Check if the application is running
+        if sudo systemctl is-active --quiet afcon-chatbot; then
+            echo "Application is running"
+        else
+            echo "Application failed to start. Checking logs..."
+            sudo journalctl -u afcon-chatbot -n 50
+        fi
+        
+        # Check if Nginx is running
+        if sudo systemctl is-active --quiet nginx; then
+            echo "Nginx is running"
+        else
+            echo "Nginx failed to start. Checking logs..."
+            sudo journalctl -u nginx -n 50
         fi
         EOF
     
