@@ -32,42 +32,41 @@ jobs:
         
     - name: Deploy to EC2
       run: |
-        # Create deployment script
-        cat > deploy.sh << 'EOSCRIPT'
-        #!/bin/bash
-        
-        # Check if app directory exists, if not create it and set up the environment
-        if [ ! -d "/home/${{ secrets.EC2_USER }}/app" ]; then
-          echo "App directory does not exist. Setting up initial environment..."
-          
-          # Create app directory
-          mkdir -p /home/${{ secrets.EC2_USER }}/app
-          
-          # Install required packages if not already installed
-          if ! command -v python3 &> /dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y python3-pip python3-venv git nginx
-          fi
-          
-          # Set up Python virtual environment
-          cd /home/${{ secrets.EC2_USER }}/app
-          python3 -m venv venv
-          source venv/bin/activate
-          
-          # Clone the repository
-          git clone https://github.com/${{ github.repository }}.git .
-          
-          # Install dependencies
-          pip install -r requirements.txt
-          
-          # Set up systemd service
-          sudo cp afcon-chatbot.service /etc/systemd/system/
-          sudo systemctl daemon-reload
-          sudo systemctl enable afcon-chatbot
-          sudo systemctl start afcon-chatbot
-          
-          # Set up Nginx as reverse proxy
-          sudo tee /etc/nginx/sites-available/afcon-chatbot << 'EOF'
+        cat > deploy.sh << 'EOF'
+#!/bin/bash
+
+# Check if app directory exists, if not create it and set up the environment
+if [ ! -d "/home/${{ secrets.EC2_USER }}/app" ]; then
+    echo "App directory does not exist. Setting up initial environment..."
+    
+    # Create app directory
+    mkdir -p /home/${{ secrets.EC2_USER }}/app
+    
+    # Install required packages if not already installed
+    if ! command -v python3 &> /dev/null; then
+        sudo apt-get update
+        sudo apt-get install -y python3-pip python3-venv git nginx
+    fi
+    
+    # Set up Python virtual environment
+    cd /home/${{ secrets.EC2_USER }}/app
+    python3 -m venv venv
+    source venv/bin/activate
+    
+    # Clone the repository
+    git clone https://github.com/${{ github.repository }}.git .
+    
+    # Install dependencies
+    pip install -r requirements.txt
+    
+    # Set up systemd service
+    sudo cp afcon-chatbot.service /etc/systemd/system/
+    sudo systemctl daemon-reload
+    sudo systemctl enable afcon-chatbot
+    sudo systemctl start afcon-chatbot
+    
+    # Set up Nginx as reverse proxy
+    sudo bash -c 'cat > /etc/nginx/sites-available/afcon-chatbot << NGINXEOF
 server {
     listen 80;
     server_name _;
@@ -80,34 +79,34 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 }
+NGINXEOF'
+    
+    # Enable the Nginx site
+    sudo ln -sf /etc/nginx/sites-available/afcon-chatbot /etc/nginx/sites-enabled/
+    sudo rm -f /etc/nginx/sites-enabled/default
+    sudo nginx -t
+    sudo systemctl restart nginx
+    
+    # Set proper permissions
+    sudo chown -R ${{ secrets.EC2_USER }}:${{ secrets.EC2_USER }} /home/${{ secrets.EC2_USER }}/app
+    
+    echo "Initial setup completed successfully!"
+else
+    # Normal deployment process
+    cd /home/${{ secrets.EC2_USER }}/app
+    git pull origin main
+    
+    # Activate virtual environment
+    source venv/bin/activate
+    
+    # Install dependencies
+    pip install -r requirements.txt
+    
+    # Restart the application
+    sudo systemctl restart afcon-chatbot
+fi
 EOF
-          
-          # Enable the Nginx site
-          sudo ln -s /etc/nginx/sites-available/afcon-chatbot /etc/nginx/sites-enabled/
-          sudo rm -f /etc/nginx/sites-enabled/default
-          sudo nginx -t
-          sudo systemctl restart nginx
-          
-          # Set proper permissions
-          sudo chown -R ${{ secrets.EC2_USER }}:${{ secrets.EC2_USER }} /home/${{ secrets.EC2_USER }}/app
-          
-          echo "Initial setup completed successfully!"
-        else
-          # Normal deployment process
-          cd /home/${{ secrets.EC2_USER }}/app
-          git pull origin main
-          
-          # Activate virtual environment
-          source venv/bin/activate
-          
-          # Install dependencies
-          pip install -r requirements.txt
-          
-          # Restart the application
-          sudo systemctl restart afcon-chatbot
-        fi
-        EOSCRIPT
-        
+
         # Copy deployment script to EC2
         scp deploy.sh ec2:~/deploy.sh
         
